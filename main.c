@@ -34,6 +34,7 @@
 FILE *sensor;
 FILE *dump;
 
+#define AUTOUPDATE_USECS 100000
 #define HISTORY_SIZE (1 << 20)
 #define MAX_CHANNELS 1
 #define Y_BITS 12
@@ -51,10 +52,20 @@ uint64_t    ts_global = 0;
 
 pthread_mutex_t history_mutex;
 
-double x_userdiv    = 1E-3;
+enum trigger_mode {
+	TG_RISE,
+	TG_FALL,
+};
+
+double x_userdiv    = 1.9E-3;
 double x_useroffset = 0;
 double y_userscale  = 14;
 double y_useroffset = -0.11;
+
+int trigger_start_mode = TG_RISE;
+int trigger_start_y    = 450;
+int trigger_end_mode   = TG_RISE;
+int trigger_end_y      = 450;
 
 void
 sensor_open()
@@ -133,7 +144,7 @@ history_flush()
 	memcpy(history[0], &history[0][HISTORY_SIZE], sizeof(*history[0])*HISTORY_SIZE);
 	history_length[0] = HISTORY_SIZE;
 
-	printf("history_flush()\n");
+	//printf("history_flush()\n");
 	pthread_mutex_unlock(&history_mutex);
 	return;
 }
@@ -173,18 +184,82 @@ cb_expose (GtkWidget      *area,
 	int history_end   = history_length[0]-2;
 
 	if (history_end >= HISTORY_SIZE) {
-		printf("%u %u\n", HISTORY_SIZE, history_end);
+		//printf("%u %u\n", HISTORY_SIZE, history_end);
 		pthread_mutex_lock(&history_mutex);
 		cairo_set_source_rgba (cr, 0, 0, 0.3, 0.8);
 		cairo_move_to(cr, -1, height/2);
-		int x;//, x_old = -1;
-		int y;//, y_old =  0;
+		int x;
+		int y;
 
 		//int history_start = history_end - HISTORY_SIZE;
-		int history_start = history_end - (double)HISTORY_SIZE*x_userdiv;
+		int history_start_initial = history_end - (double)HISTORY_SIZE*x_userdiv;
+		int history_start = history_start_initial;
+
+		if (history_start == 0)
+			history_start++;
+
+		printf("h: %u %u\n", history_start, history_end);
+
+		char found;
+
+		found = 0;
+		while (history_start < history_end && !found) {
+			history_t *cur  = &history[0][history_start];
+			history_t *prev = &history[0][history_start-1];
+			//printf("1 %u %u\n", cur->value, prev->value);
+			switch (trigger_start_mode) {
+				case TG_FALL:
+					found = (cur->value >= trigger_start_y && prev->value <  trigger_start_y);
+					break;
+				case TG_RISE:
+					found = (cur->value <  trigger_start_y && prev->value >= trigger_start_y);
+					break;
+			}
+
+			if (found)
+				break;
+
+			history_start++;
+		}
+
+		if (history_start >= history_end) {
+			printf("Unable to sync start\n");
+			history_start = history_start_initial;
+		}
+
+		int history_end_initial = history_end;
+		history_end--;
+
+		found = 0;
+		while (history_start < history_end && !found) {
+			history_t *cur  = &history[0][history_end];
+			history_t *prev = &history[0][history_end+1];
+			//printf("2 %u %u\n", cur->value, prev->value);
+			switch (trigger_end_mode) {
+				case TG_RISE:
+					found = (cur->value >= trigger_end_y && prev->value <  trigger_end_y);
+					break;
+				case TG_FALL:
+					found = (cur->value <  trigger_end_y && prev->value >= trigger_end_y);
+					break;
+			}
+
+			if (found)
+				break;
+
+			history_end--;
+		}
+
+		if (history_start >= history_end) {
+			printf("Unable to sync end\n");
+			history_end = history_end_initial;
+		}
+
+		printf("H: %u %u\n", history_start, history_end);
+
 		uint64_t timestamp_start = history[0][history_start].timestamp;
 		uint64_t timestamp_end   = history[0][history_end  ].timestamp;
-		
+
 		int history_cur = history_start;
 
 		if (timestamp_start == timestamp_end) {
@@ -216,12 +291,26 @@ cb_expose (GtkWidget      *area,
 	return TRUE;
 }
 
+void *
+update (void *arg)
+{
+	GtkWidget *area = arg;
+
+	while (running) {
+		gtk_widget_queue_draw(area);
+		usleep(AUTOUPDATE_USECS);
+	}
+
+	return NULL;
+}
+
 int
 main (int    argc,
       char **argv)
 {
 	int i;
 	pthread_t thread_fetcher;
+	pthread_t thread_autoupdate;
 	//sensor_open();
 	i = 0;
 	while (i < MAX_CHANNELS)
@@ -253,10 +342,19 @@ main (int    argc,
 	                          G_CALLBACK (gtk_widget_queue_draw), area);
 	gtk_widget_show_all (main_window);
 
+	if (pthread_create(&thread_autoupdate, NULL, update, area)) {
+		fprintf(stderr, "Error creating thread\n");
+		return 1;
+	}
+
 	gtk_main ();
 
 	running = 0;
 
+	if (pthread_join(thread_autoupdate, NULL)) {
+		fprintf(stderr, "Error joining thread\n");
+		return 2;
+	}
 	if (pthread_join(thread_fetcher, NULL)) {
 		fprintf(stderr, "Error joining thread\n");
 		return 2;
