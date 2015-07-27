@@ -60,8 +60,8 @@ enum trigger_mode {
 
 double x_userdiv    = 1.9E-3;
 double x_useroffset = 0;
-double y_userscale  = 7;
-double y_useroffset = -0.17;
+double y_userscale  = 4;
+double y_useroffset = -0.14;
 
 int trigger_start_mode = TG_RISE;
 int trigger_start_y    = 695;
