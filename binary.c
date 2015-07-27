@@ -20,7 +20,9 @@
 
 #include <assert.h>	/* assert()	*/
 #include <unistd.h>
+#include <stdio.h>
 
+#include "configuration.h"
 #include "binary.h"
 
 
@@ -28,8 +30,15 @@
 	x ## _t get_ ## x (FILE *i_f) {		\
 		x ## _t r;				\
 							\
+							\
 		if (fread(&r, sizeof(r), 1, i_f) < 1) {	\
-			if (feof(i_f)) sleep(3600*24*30);	\
+			while (feof(i_f)) {		\
+				usleep(AUTOUPDATE_USECS);\
+				clearerr(i_f);\
+				if (fread(&r, sizeof(r), 1, i_f) < 1 && !feof(i_f))\
+					assert (ferror(i_f));		\
+				return r;\
+			}				\
 			assert (ferror(i_f));		\
 		}					\
 							\
@@ -39,5 +48,5 @@
 DECLARE_GET_X_t(uint64);
 DECLARE_GET_X_t(uint32);
 DECLARE_GET_X_t(uint16);
-//DECLARE_GET_X_t(uint8);
+DECLARE_GET_X_t(uint8);
 

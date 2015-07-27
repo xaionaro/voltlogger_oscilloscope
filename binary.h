@@ -23,4 +23,5 @@
 extern uint64_t get_uint64(FILE *i_f);
 extern uint32_t get_uint32(FILE *i_f);
 extern uint16_t get_uint16(FILE *i_f);
+extern uint8_t  get_uint8(FILE *i_f);
 

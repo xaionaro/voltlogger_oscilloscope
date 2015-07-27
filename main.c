@@ -27,14 +27,15 @@
 //#include <fcntl.h>
 #include <gtk/gtk.h>
 #include <pthread.h>
+#include <errno.h>
 
+#include "configuration.h"
 #include "binary.h"
 #include "malloc.h"
 
 FILE *sensor;
 FILE *dump;
 
-#define AUTOUPDATE_USECS 100000
 #define HISTORY_SIZE (1 << 20)
 #define MAX_CHANNELS 1
 #define Y_BITS 12
@@ -59,13 +60,13 @@ enum trigger_mode {
 
 double x_userdiv    = 1.9E-3;
 double x_useroffset = 0;
-double y_userscale  = 14;
-double y_useroffset = -0.11;
+double y_userscale  = 7;
+double y_useroffset = -0.17;
 
 int trigger_start_mode = TG_RISE;
-int trigger_start_y    = 450;
+int trigger_start_y    = 695;
 int trigger_end_mode   = TG_RISE;
-int trigger_end_y      = 450;
+int trigger_end_y      = 695;
 
 void
 sensor_open()
@@ -105,9 +106,28 @@ sensor_close()
 }
 
 void
-dump_open()
+dump_open(char *dumppath, char tailonly)
 {
 	dump = stdin;
+
+	if (dumppath == NULL)
+		return;
+
+	if (*dumppath == 0)
+		return;
+
+	if (!strcmp(dumppath, "-"))
+		return;
+
+	dump = fopen(dumppath, "r");
+	if (dump == NULL) {
+		fprintf(stderr, "Cannot open file \"%s\": %s", dumppath, strerror(errno));
+		abort ();
+	}
+
+	if (tailonly) {
+		fseek(dump, 0, SEEK_END);
+	}
 
 	return;
 }
@@ -120,12 +140,26 @@ dump_fetch(history_t *p)
 	uint32_t value;
 
 	ts_parse  = get_uint64(dump);
+	while (ts_parse < 1437900000000000000 || ts_parse > 1537900000000000000) {
+		printf("dump_fetch() correction 0\n");
+		get_uint8(dump);
+		ts_parse  = get_uint64(dump);
+	}
+
 	ts_device = get_uint64(dump);
+
 	value     = get_uint32(dump);
+	while (value < 0 || value > 1024) {
+		printf("dump_fetch() correction 1\n");
+		value     = get_uint32(dump);
+	}
 
 	(void)ts_parse;
 	p->timestamp = ts_device;
 	p->value     = value;
+
+	//printf("V: %lu %lu %u\n", ts_parse, ts_device, value);
+	//sleep(1);
 
 	return 1;
 }
@@ -144,7 +178,7 @@ history_flush()
 	memcpy(history[0], &history[0][HISTORY_SIZE], sizeof(*history[0])*HISTORY_SIZE);
 	history_length[0] = HISTORY_SIZE;
 
-	//printf("history_flush()\n");
+	printf("history_flush()\n");
 	pthread_mutex_unlock(&history_mutex);
 	return;
 }
@@ -176,17 +210,19 @@ cb_expose (GtkWidget      *area,
 	height	= gdk_window_get_height (event->window);
 
 	cairo_rectangle(cr, 0, 0, width, height);
-	cairo_set_source_rgb(cr, 1, 1, 1);
+	cairo_set_source_rgb(cr, 0, 0, 0);
 	cairo_fill(cr);
 
 	cairo_set_line_width (cr, 2);
 
 	int history_end   = history_length[0]-2;
 
-	if (history_end >= HISTORY_SIZE) {
+	if (history_end >= (double)HISTORY_SIZE*x_userdiv) {
 		//printf("%u %u\n", HISTORY_SIZE, history_end);
 		pthread_mutex_lock(&history_mutex);
-		cairo_set_source_rgba (cr, 0, 0, 0.3, 0.8);
+		//cairo_set_source_rgba (cr, 0, 0, 0.3, 0.8);
+		//cairo_set_source_rgba (cr, 0.8, 0.8, 1, 0.8);
+		cairo_set_source_rgba (cr, 0.1, 1, 0.1, 0.8);
 		cairo_move_to(cr, -1, height/2);
 		int x;
 		int y;
@@ -198,7 +234,7 @@ cb_expose (GtkWidget      *area,
 		if (history_start == 0)
 			history_start++;
 
-		printf("h: %u %u\n", history_start, history_end);
+		//printf("h: %u %u\n", history_start, history_end);
 
 		char found;
 
@@ -255,7 +291,7 @@ cb_expose (GtkWidget      *area,
 			history_end = history_end_initial;
 		}
 
-		printf("H: %u %u\n", history_start, history_end);
+		//printf("H: %u %u\n", history_start, history_end);
 
 		uint64_t timestamp_start = history[0][history_start].timestamp;
 		uint64_t timestamp_end   = history[0][history_end  ].timestamp;
@@ -282,7 +318,8 @@ cb_expose (GtkWidget      *area,
 		pthread_mutex_unlock(&history_mutex);
 	}
 
-	cairo_set_source_rgba (cr, 0, 0, 0, 0.2);
+	//cairo_set_source_rgba (cr, 0, 0, 0, 0.2);
+	cairo_set_source_rgba (cr, 1, 1, 1, 0.2);
 	cairo_move_to(cr, 0,	 height/2);
 	cairo_line_to(cr, width, height/2);
 	cairo_stroke(cr);
@@ -311,11 +348,36 @@ main (int    argc,
 	int i;
 	pthread_t thread_fetcher;
 	pthread_t thread_autoupdate;
+	char *dumppath = NULL;
+	char tailonly = 0;
 	//sensor_open();
+
+	// Parsing arguments
+	char c;
+	while ((c = getopt (argc, argv, "i:tf")) != -1) {
+		char *arg;
+		arg = optarg;
+
+		switch (c)
+		{
+			case 'i':
+				dumppath = arg;
+				break;
+			case 't':
+				tailonly = 1;
+				break;
+			default:
+				abort ();
+		}
+	}
+
+
 	i = 0;
 	while (i < MAX_CHANNELS)
 		history[i++] = xcalloc(HISTORY_SIZE * 2 + 1, sizeof(history_t));
-	dump_open();
+
+
+	dump_open(dumppath, tailonly);
 
 	if (pthread_create(&thread_fetcher, NULL, history_fetcher, NULL)) {
 		fprintf(stderr, "Error creating thread\n");
