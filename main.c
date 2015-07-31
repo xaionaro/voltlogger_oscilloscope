@@ -37,18 +37,19 @@ FILE *sensor;
 FILE *dump;
 
 #define HISTORY_SIZE (1 << 20)
-#define MAX_CHANNELS 1
+#define MAX_REAL_CHANNELS 7
+#define MAX_MATH_CHANNELS 3
 #define Y_BITS 12
 
 typedef struct {
 	uint64_t timestamp;
-	uint32_t value;
+	uint32_t value[MAX_REAL_CHANNELS];
 } history_t;
 
 int running = 1;
 
-history_t  *history       [MAX_CHANNELS];
-uint32_t    history_length[MAX_CHANNELS] = {0};
+history_t  *history;
+uint32_t    history_length = 0;
 uint64_t    ts_global = 0;
 
 pthread_mutex_t history_mutex;
@@ -58,15 +59,21 @@ enum trigger_mode {
 	TG_FALL,
 };
 
-double x_userdiv    = 1.9E-3;
+double x_userdiv    = 0.95E-3;
 double x_useroffset = 0;
-double y_userscale  = 4;
-double y_useroffset = -0.14;
+double y_userscale [MAX_REAL_CHANNELS + MAX_MATH_CHANNELS];
+double y_useroffset[MAX_REAL_CHANNELS + MAX_MATH_CHANNELS];
 
-int trigger_start_mode = TG_RISE;
-int trigger_start_y    = 695;
-int trigger_end_mode   = TG_RISE;
-int trigger_end_y      = 695;
+int trigger_channel	= 0;
+int trigger_start_mode	= TG_RISE;
+int trigger_start_y	= 675;
+int trigger_end_mode	= TG_RISE;
+int trigger_end_y	= 675;
+
+int channelsNum		= 1;
+int mathChannelsNum	= 0;
+
+double line_colors[MAX_REAL_CHANNELS + MAX_MATH_CHANNELS][3] = {{1}};
 
 void
 sensor_open()
@@ -81,10 +88,8 @@ sensor_fetch(history_t *p)
 {
 	uint16_t ts_local;
 	uint16_t ts_local_old;
-	uint16_t value;
 
 	ts_local = get_uint16(sensor);
-	value    = get_uint16(sensor);
 
 	ts_local_old = ts_global & 0xffff;
 	if (ts_local <= ts_local_old) {
@@ -94,7 +99,10 @@ sensor_fetch(history_t *p)
 	ts_global = (ts_global & ~0xffff) | ts_local;
 
 	p->timestamp = ts_global;
-	p->value     = value;
+
+	int i = 0;
+	while (i < channelsNum)
+		p->value[i++] = get_uint16(sensor);
 
 	return 1;
 }
@@ -127,7 +135,10 @@ dump_open(char *dumppath, char tailonly)
 
 	if (tailonly) {
 		fseek(dump, 0, SEEK_END);
+	} else {
+		fseek(dump, 0, SEEK_SET);
 	}
+	//fprintf(stderr, "Pos: %li\n", ftell(dump));
 
 	return;
 }
@@ -141,24 +152,26 @@ dump_fetch(history_t *p)
 
 	ts_parse  = get_uint64(dump);
 	while (ts_parse < 1437900000000000000 || ts_parse > 1537900000000000000) {
-		printf("dump_fetch() correction 0\n");
+		printf("dump_fetch() correction 0: %lu %li\n", ts_parse, ftell(dump));
 		get_uint8(dump);
-		ts_parse  = get_uint64(dump);
+		ts_parse = get_uint64(dump);
 	}
 
 	ts_device = get_uint64(dump);
 
-	value     = get_uint32(dump);
-	while (value < 0 || value > 1024) {
-		printf("dump_fetch() correction 1\n");
-		value     = get_uint32(dump);
+	int i = 0;
+	while (i < channelsNum) {
+		p->value[i] = get_uint32(dump);
+		while (value < 0 || value > 1024) {
+			printf("dump_fetch() correction 1\n");
+			p->value[i] = get_uint32(dump);
+		}
+		i++;
 	}
 
 	(void)ts_parse;
 	p->timestamp = ts_device;
-	p->value     = value;
 
-	//printf("V: %lu %lu %u\n", ts_parse, ts_device, value);
 	//sleep(1);
 
 	return 1;
@@ -175,8 +188,8 @@ history_flush()
 {
 	//sleep(3600);
 	pthread_mutex_lock(&history_mutex);
-	memcpy(history[0], &history[0][HISTORY_SIZE], sizeof(*history[0])*HISTORY_SIZE);
-	history_length[0] = HISTORY_SIZE;
+	memcpy(history, &history[HISTORY_SIZE], sizeof(*history)*HISTORY_SIZE);
+	history_length = HISTORY_SIZE;
 
 	printf("history_flush()\n");
 	pthread_mutex_unlock(&history_mutex);
@@ -188,9 +201,9 @@ history_fetcher(void *arg)
 {
 	while (running) {
 		//sensor_fetch(&history[0][ history_length[0]++ ]);
-		dump_fetch(&history[0][ history_length[0]++ ]);
+		dump_fetch(&history[ history_length++ ]);
 //		printf("%lu; %u\n", history[0][ history_length[0]-1].timestamp, history[0][ history_length[0]-1].value);
-		if (history_length[0] >= HISTORY_SIZE * 2) 
+		if (history_length >= HISTORY_SIZE * 2) 
 			history_flush();
 	}
 
@@ -215,15 +228,13 @@ cb_expose (GtkWidget      *area,
 
 	cairo_set_line_width (cr, 2);
 
-	int history_end   = history_length[0]-2;
+	int history_end   = history_length-2;
 
 	if (history_end >= (double)HISTORY_SIZE*x_userdiv) {
 		//printf("%u %u\n", HISTORY_SIZE, history_end);
 		pthread_mutex_lock(&history_mutex);
 		//cairo_set_source_rgba (cr, 0, 0, 0.3, 0.8);
 		//cairo_set_source_rgba (cr, 0.8, 0.8, 1, 0.8);
-		cairo_set_source_rgba (cr, 0.1, 1, 0.1, 0.8);
-		cairo_move_to(cr, -1, height/2);
 		int x;
 		int y;
 
@@ -240,15 +251,15 @@ cb_expose (GtkWidget      *area,
 
 		found = 0;
 		while (history_start < history_end && !found) {
-			history_t *cur  = &history[0][history_start];
-			history_t *prev = &history[0][history_start-1];
+			history_t *cur  = &history[history_start];
+			history_t *prev = &history[history_start-1];
 			//printf("1 %u %u\n", cur->value, prev->value);
 			switch (trigger_start_mode) {
 				case TG_FALL:
-					found = (cur->value >= trigger_start_y && prev->value <  trigger_start_y);
+					found = (cur->value[trigger_channel] >= trigger_start_y && prev->value[trigger_channel] <  trigger_start_y);
 					break;
 				case TG_RISE:
-					found = (cur->value <  trigger_start_y && prev->value >= trigger_start_y);
+					found = (cur->value[trigger_channel] <  trigger_start_y && prev->value[trigger_channel] >= trigger_start_y);
 					break;
 			}
 
@@ -268,15 +279,15 @@ cb_expose (GtkWidget      *area,
 
 		found = 0;
 		while (history_start < history_end && !found) {
-			history_t *cur  = &history[0][history_end];
-			history_t *prev = &history[0][history_end+1];
+			history_t *cur  = &history[history_end];
+			history_t *prev = &history[history_end+1];
 			//printf("2 %u %u\n", cur->value, prev->value);
 			switch (trigger_end_mode) {
 				case TG_RISE:
-					found = (cur->value >= trigger_end_y && prev->value <  trigger_end_y);
+					found = (cur->value[trigger_channel] >= trigger_end_y && prev->value[trigger_channel] <  trigger_end_y);
 					break;
 				case TG_FALL:
-					found = (cur->value <  trigger_end_y && prev->value >= trigger_end_y);
+					found = (cur->value[trigger_channel] <  trigger_end_y && prev->value[trigger_channel] >= trigger_end_y);
 					break;
 			}
 
@@ -293,28 +304,52 @@ cb_expose (GtkWidget      *area,
 
 		//printf("H: %u %u\n", history_start, history_end);
 
-		uint64_t timestamp_start = history[0][history_start].timestamp;
-		uint64_t timestamp_end   = history[0][history_end  ].timestamp;
-
-		int history_cur = history_start;
+		uint64_t timestamp_start = history[history_start].timestamp;
+		uint64_t timestamp_end   = history[history_end  ].timestamp;
 
 		if (timestamp_start == timestamp_end) {
-			printf("%lu %lu %u %u %u %u\n", timestamp_start, timestamp_end, history_start, history_end, history[0][history_start].value, history[0][history_end].value);
+			printf("%lu %lu %u %u %u %u\n", timestamp_start, timestamp_end, history_start, history_end, history[history_start].value[0], history[history_end].value[0]);
 		}
 		assert (timestamp_end != timestamp_start);
 
 		double x_scale = (double)width  / (timestamp_end - timestamp_start);
 		double y_scale = (double)height / (1 << Y_BITS);
 
-		while (history_cur < history_end) {
-			history_t *p = &history[0][ history_cur++ ];
+		int chan = 0;
+		while (chan < channelsNum) {
+			int history_cur = history_start;
+			cairo_set_source_rgba (cr, line_colors[chan][0], line_colors[chan][1], line_colors[chan][2], 0.8);
+			cairo_move_to(cr, -1, height/2);
+			while (history_cur < history_end) {
+				history_t *p = &history[ history_cur++ ];
 
-			x = (double)x_useroffset*width              + (double)x_scale               * (double)(p->timestamp - timestamp_start);
-			y = (double)height/2 + (double)y_useroffset*y_userscale*height + (double)y_scale * y_userscale * (double) p->value;
-			cairo_line_to(cr, x, y);
-			//printf("xy: %u (%lu %e) %u (%u %e %e)\n", x, p->timestamp - timestamp_start, x_scale, y, p->value, y_scale, y_userscale);
+				x = (double)x_useroffset*width              + (double)x_scale               * (double)(p->timestamp - timestamp_start);
+				y = (double)height/2 + (double)y_useroffset[chan]*y_userscale[chan]*height - (double)y_scale * y_userscale[chan] * (double) p->value[chan];
+				cairo_line_to(cr, x, y);
+				//printf("xy: %u (%lu %e) %u (%u %e %e)\n", x, p->timestamp - timestamp_start, x_scale, y, p->value, y_scale, y_userscale);
+			}
+			cairo_stroke(cr);
+
+			chan++;
 		}
-		cairo_stroke(cr);
+
+		chan = 0;
+		while (chan < mathChannelsNum) {
+			int history_cur = history_start;
+			cairo_set_source_rgba (cr, line_colors[MAX_REAL_CHANNELS + chan][0], line_colors[MAX_REAL_CHANNELS + chan][1], line_colors[MAX_REAL_CHANNELS + chan][2], 0.5);
+			cairo_move_to(cr, -1, height/2);
+			while (history_cur < history_end) {
+				history_t *p = &history[ history_cur++ ];
+
+				x = (double)x_useroffset*width              + (double)x_scale               * (double)(p->timestamp - timestamp_start);
+				y = (double)height/2 + (double)y_useroffset[chan]*y_userscale[chan]*height - (double)y_scale * y_userscale[chan] * (double) p->value[chan*2] * (p->value[chan*2] + 1);
+				cairo_line_to(cr, x, y);
+				//printf("xy: %u (%lu %e) %u (%u %e %e)\n", x, p->timestamp - timestamp_start, x_scale, y, p->value, y_scale, y_userscale);
+			}
+			cairo_stroke(cr);
+
+			chan++;
+		}
 		pthread_mutex_unlock(&history_mutex);
 	}
 
@@ -345,7 +380,6 @@ int
 main (int    argc,
       char **argv)
 {
-	int i;
 	pthread_t thread_fetcher;
 	pthread_t thread_autoupdate;
 	char *dumppath = NULL;
@@ -354,7 +388,7 @@ main (int    argc,
 
 	// Parsing arguments
 	char c;
-	while ((c = getopt (argc, argv, "i:tf")) != -1) {
+	while ((c = getopt (argc, argv, "i:tfC:M:")) != -1) {
 		char *arg;
 		arg = optarg;
 
@@ -366,15 +400,22 @@ main (int    argc,
 			case 't':
 				tailonly = 1;
 				break;
+			case 'C':
+				channelsNum = atoi(arg);
+				break;
+			case 'M':
+				mathChannelsNum = atoi(arg);
+				break;
 			default:
 				abort ();
 		}
 	}
 
 
-	i = 0;
-	while (i < MAX_CHANNELS)
-		history[i++] = xcalloc(HISTORY_SIZE * 2 + 1, sizeof(history_t));
+	assert (channelsNum     < MAX_REAL_CHANNELS);
+	assert (mathChannelsNum < MAX_MATH_CHANNELS);
+
+	history = xcalloc(HISTORY_SIZE * 2 + 1, sizeof(history_t));
 
 
 	dump_open(dumppath, tailonly);
@@ -390,6 +431,9 @@ main (int    argc,
 	          *area;
 
 	gtk_init (&argc, &argv);
+
+	//gtk_builder_add_from_file (builder, "oscilloscope.glade", NULL);
+
 	main_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_default_size (GTK_WINDOW (main_window), 800, 600);
 	g_signal_connect (main_window, "destroy", gtk_main_quit, NULL);
@@ -409,6 +453,57 @@ main (int    argc,
 		return 1;
 	}
 
+	line_colors[0][0] = 1;
+	line_colors[0][1] = 0;
+	line_colors[0][2] = 0;
+
+	line_colors[1][0] = 0;
+	line_colors[1][1] = 1;
+	line_colors[1][2] = 0;
+
+	line_colors[2][0] = 0;
+	line_colors[2][1] = 0;
+	line_colors[2][2] = 1;
+
+	line_colors[3][0] = 1;
+	line_colors[3][1] = 1;
+	line_colors[3][2] = 0;
+
+	line_colors[4][0] = 1;
+	line_colors[4][1] = 0;
+	line_colors[4][2] = 1;
+
+	line_colors[5][0] = 0;
+	line_colors[5][1] = 1;
+	line_colors[5][2] = 1;
+
+	line_colors[6][0] = 0.5;
+	line_colors[6][1] = 0.5;
+	line_colors[6][2] = 0.5;
+
+	line_colors[7][0] = 1;
+	line_colors[7][1] = 1;
+	line_colors[7][2] = 1;
+
+	line_colors[8][0] = 1;
+	line_colors[8][1] = 1;
+	line_colors[9][2] = 1;
+
+	line_colors[9][0] = 1;
+	line_colors[9][1] = 1;
+	line_colors[9][2] = 1;
+
+#if MAX_REAL_CHANNELS + MAX_MATH_CHANNELS < 10
+	#error MAX_REAL_CHANNELS + MAX_MATH_CHANNELS < 10
+#endif
+
+	int chan = 0;
+	while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
+		y_userscale[chan]  = 2;
+		y_useroffset[chan] = 0.14;
+		chan++;
+	}
+
 	gtk_main ();
 
 	running = 0;
@@ -424,9 +519,7 @@ main (int    argc,
 
 //	sensor_close();
 	dump_close();
-	i = 0;
-	while (i < MAX_CHANNELS)
-		free(history[i++]);
+	free(history);
 	return 0;
 }
 
