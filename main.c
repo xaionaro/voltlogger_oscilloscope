@@ -41,6 +41,8 @@ FILE *dump;
 #define MAX_MATH_CHANNELS 3
 #define Y_BITS 12
 
+#define GLADE_PATH "oscilloscope.glade"
+
 typedef struct {
 	uint64_t timestamp;
 	uint32_t value[MAX_REAL_CHANNELS];
@@ -172,6 +174,8 @@ dump_fetch(history_t *p)
 	(void)ts_parse;
 	p->timestamp = ts_device;
 
+	//fprintf(stderr, "%u\n", p->value[0]);
+
 	//sleep(1);
 
 	return 1;
@@ -199,10 +203,12 @@ history_flush()
 void *
 history_fetcher(void *arg)
 {
+	//fprintf(stderr, "history_fetcher\n");
+
 	while (running) {
 		//sensor_fetch(&history[0][ history_length[0]++ ]);
 		dump_fetch(&history[ history_length++ ]);
-//		printf("%lu; %u\n", history[0][ history_length[0]-1].timestamp, history[0][ history_length[0]-1].value);
+		//printf("%lu; %u\n", history[ history_length-1].timestamp, history[ history_length-1].value[0]);
 		if (history_length >= HISTORY_SIZE * 2) 
 			history_flush();
 	}
@@ -211,16 +217,21 @@ history_fetcher(void *arg)
 }
 
 static gboolean
-cb_expose (GtkWidget      *area,
-           GdkEventExpose *event,
-           gpointer       *data)
+cb_draw (GtkWidget	*area,
+         cairo_t	*cr,
+         gpointer	*data)
 {
 	int width, height;
-	cairo_t *cr;
 
-	cr	= gdk_cairo_create (event->window);
-	width	= gdk_window_get_width (event->window);
-	height	= gdk_window_get_height (event->window);
+	GdkWindow *areaGdkWindow = gtk_widget_get_window(area);
+
+	assert (areaGdkWindow != NULL);
+
+	//gtk_window_get_size (gtk_widget_get_window(area), &width, &height);
+	width	= gdk_window_get_width  (areaGdkWindow);
+	height	= gdk_window_get_height (areaGdkWindow);
+
+	//fprintf(stderr, "%i %i\n", width, height);
 
 	cairo_rectangle(cr, 0, 0, width, height);
 	cairo_set_source_rgb(cr, 0, 0, 0);
@@ -359,7 +370,6 @@ cb_expose (GtkWidget      *area,
 	cairo_line_to(cr, width, height/2);
 	cairo_stroke(cr);
 
-	cairo_destroy (cr);
 	return TRUE;
 }
 
@@ -385,6 +395,17 @@ main (int    argc,
 	char *dumppath = NULL;
 	char tailonly = 0;
 	//sensor_open();
+
+	history = xcalloc(HISTORY_SIZE * 2 + 1, sizeof(history_t));
+
+
+	GtkWidget *main_window,
+	          *button,
+	          *area;
+
+	GtkBuilder *builder;
+
+	gtk_init (&argc, &argv);
 
 	// Parsing arguments
 	char c;
@@ -412,11 +433,8 @@ main (int    argc,
 	}
 
 
-	assert (channelsNum     < MAX_REAL_CHANNELS);
-	assert (mathChannelsNum < MAX_MATH_CHANNELS);
-
-	history = xcalloc(HISTORY_SIZE * 2 + 1, sizeof(history_t));
-
+	assert ( channelsNum     < MAX_REAL_CHANNELS );
+	assert ( mathChannelsNum < MAX_MATH_CHANNELS );
 
 	dump_open(dumppath, tailonly);
 
@@ -425,25 +443,31 @@ main (int    argc,
 		return 1;
 	}
 
-	GtkWidget *main_window,
-	          *vbox,
-	          *button,
-	          *area;
+	builder = gtk_builder_new();
 
-	gtk_init (&argc, &argv);
+	GError *gerr = NULL;
 
-	//gtk_builder_add_from_file (builder, "oscilloscope.glade", NULL);
+	if ( gtk_builder_add_from_file (builder, GLADE_PATH, &gerr) <= 0 ) {
+		fprintf(stderr, "Cannot parse file \""GLADE_PATH"\": %s\n", gerr->message);
+		return 3;
+	}
+	main_window = GTK_WIDGET ( gtk_builder_get_object (builder, "mainwindow") );
+	assert ( main_window != NULL );
 
-	main_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_default_size (GTK_WINDOW (main_window), 800, 600);
+	//main_window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	//gtk_window_set_default_size (GTK_WINDOW (main_window), 800, 600);
+
 	g_signal_connect (main_window, "destroy", gtk_main_quit, NULL);
-	vbox = gtk_vbox_new (FALSE, 5);
-	gtk_container_add (GTK_CONTAINER (main_window), vbox);
-	button = gtk_button_new_from_stock (GTK_STOCK_REFRESH);
-	gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-	area = gtk_drawing_area_new ();
-	g_signal_connect (area, "expose-event", G_CALLBACK (cb_expose), NULL);
-	gtk_box_pack_start (GTK_BOX (vbox), area, TRUE, TRUE, 0);
+	//button = gtk_button_new_from_stock (GTK_STOCK_REFRESH);
+	button = GTK_WIDGET ( gtk_builder_get_object(builder, "refresh") );
+
+	assert (button != NULL);
+
+	area = GTK_WIDGET ( gtk_builder_get_object(builder, "oscillogram") );
+
+	assert (area != NULL);
+
+	g_signal_connect (area, "draw", G_CALLBACK (cb_draw), NULL);
 	g_signal_connect_swapped (button, "clicked",
 	                          G_CALLBACK (gtk_widget_queue_draw), area);
 	gtk_widget_show_all (main_window);

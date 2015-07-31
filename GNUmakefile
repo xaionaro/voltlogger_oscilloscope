@@ -7,12 +7,12 @@ EXAMPLES ?= yes
 
 CSECFLAGS ?= -fstack-protector-all -Wall --param ssp-buffer-size=4 -D_FORTIFY_SOURCE=2 -fstack-check -DPARANOID -std=gnu99
 CFLAGS ?= -pipe -O2
-CFLAGS += $(CSECFLAGS) $(shell pkg-config --cflags gtk+-2.0) -flto
-DEBUGCFLAGS ?= -pipe -Wall -Werror -ggdb3 -export-dynamic -Wno-error=unused-variable -O0 -pipe $(CSECFLAGS) $(shell pkg-config --cflags gtk+-2.0)
+CFLAGS += $(CSECFLAGS) $(shell pkg-config --cflags gtk+-3.0) -flto
+DEBUGCFLAGS ?= -pipe -Wall -Werror -ggdb3 -export-dynamic -Wno-error=unused-variable -O0 -pipe $(CSECFLAGS) $(shell pkg-config --cflags gtk+-3.0)
 
 CARCHFLAGS ?= -march=native
 
-LIBS := -lm $(shell pkg-config --libs gtk+-2.0)
+LIBS := -lm $(shell pkg-config --libs gtk+-3.0)
 LDSECFLAGS ?= -Xlinker -zrelro
 LDFLAGS += $(LDSECFLAGS) -pthread -flto
 INC := $(INC)
