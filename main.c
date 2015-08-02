@@ -50,6 +50,8 @@ typedef struct {
 
 int running = 1;
 
+
+GtkBuilder *builder;
 history_t  *history;
 uint32_t    history_length = 0;
 uint64_t    ts_global = 0;
@@ -214,6 +216,45 @@ history_fetcher(void *arg)
 	}
 
 	return NULL;
+}
+
+void
+cb_offset_changed (
+		GtkRange *range,
+		gpointer  user_data)
+{
+	double *offset_value = user_data;
+
+	*offset_value = gtk_range_get_value (range);
+	return;
+}
+
+void
+cb_resize (
+		GtkWindow *window, 
+		GdkEvent *event,
+		gpointer data)
+{
+	int width, height;
+	char offsetwidgetname[] = "offset_chanX";
+
+	width  = event->configure.width;
+	height = event->configure.height;
+
+	GtkWidget *offset;
+
+	int chan = 0;
+	while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
+		offsetwidgetname[11] = chan++ + '0';
+
+		offset = GTK_WIDGET ( gtk_builder_get_object(builder, offsetwidgetname) );
+		if (offset == NULL)
+			continue;
+
+		gtk_widget_set_size_request (offset, 10, height);
+	}
+
+	printf("%d, %d\n", width, height);
 }
 
 static gboolean
@@ -403,8 +444,6 @@ main (int    argc,
 	          *button,
 	          *area;
 
-	GtkBuilder *builder;
-
 	gtk_init (&argc, &argv);
 
 	// Parsing arguments
@@ -467,7 +506,10 @@ main (int    argc,
 
 	assert (area != NULL);
 
-	g_signal_connect (area, "draw", G_CALLBACK (cb_draw), NULL);
+	g_signal_connect (area, "draw",   G_CALLBACK (cb_draw), NULL);
+	//g_signal_connect (area, "resize", G_CALLBACK (cb_resize), main_window);
+	g_signal_connect (area, "configure-event", G_CALLBACK(cb_resize), NULL);
+
 	g_signal_connect_swapped (button, "clicked",
 	                          G_CALLBACK (gtk_widget_queue_draw), area);
 	gtk_widget_show_all (main_window);
@@ -521,11 +563,29 @@ main (int    argc,
 	#error MAX_REAL_CHANNELS + MAX_MATH_CHANNELS < 10
 #endif
 
-	int chan = 0;
-	while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
-		y_userscale[chan]  = 2;
-		y_useroffset[chan] = 0.14;
-		chan++;
+	{
+		char offsetwidgetname[] = "offset_chanX";
+		int chan = 0;
+		while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
+
+			y_userscale[chan]  = 2;
+			y_useroffset[chan] = 0.14;
+
+			offsetwidgetname[11] = chan + '0';
+			GtkRange *offset = GTK_RANGE ( gtk_builder_get_object(builder, offsetwidgetname) );
+
+			if (offset == NULL) {
+				chan++;
+				continue;
+			}
+
+			gtk_range_set_range(offset, -1 , 1);
+			gtk_range_set_value(offset, 0.14);
+			gtk_range_set_increments(offset, 0.05, 0.5);
+
+			g_signal_connect (offset, "value-changed", G_CALLBACK (cb_offset_changed), &y_useroffset[chan]);
+			chan++;
+		}
 	}
 
 	gtk_main ();
