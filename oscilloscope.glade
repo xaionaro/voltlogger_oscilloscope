@@ -213,7 +213,7 @@
               </packing>
             </child>
             <child>
-              <object class="GtkScale" id="scale_chan2">
+              <object class="GtkScale" id="scale_chan1">
                 <property name="width_request">24</property>
                 <property name="height_request">120</property>
                 <property name="visible">True</property>
@@ -227,7 +227,7 @@
               </packing>
             </child>
             <child>
-              <object class="GtkScale" id="scale_chan4">
+              <object class="GtkScale" id="scale_chan2">
                 <property name="width_request">24</property>
                 <property name="height_request">120</property>
                 <property name="visible">True</property>
@@ -241,7 +241,7 @@
               </packing>
             </child>
             <child>
-              <object class="GtkScale" id="scale_chan1">
+              <object class="GtkScale" id="scale_chan3">
                 <property name="width_request">24</property>
                 <property name="height_request">120</property>
                 <property name="visible">True</property>
@@ -255,7 +255,7 @@
               </packing>
             </child>
             <child>
-              <object class="GtkScale" id="scale_chan3">
+              <object class="GtkScale" id="scale_chan4">
                 <property name="width_request">24</property>
                 <property name="height_request">120</property>
                 <property name="visible">True</property>
