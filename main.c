@@ -219,6 +219,17 @@ history_fetcher(void *arg)
 }
 
 void
+cb_scale_changed (
+		GtkRange *range,
+		gpointer  user_data)
+{
+	double *scale_value = user_data;
+
+	*scale_value = gtk_range_get_value (range);
+	return;
+}
+
+void
 cb_offset_changed (
 		GtkRange *range,
 		gpointer  user_data)
@@ -565,6 +576,7 @@ main (int    argc,
 
 	{
 		char offsetwidgetname[] = "offset_chanX";
+		char scalewidgetname[]  = "scale_chanX";
 		int chan = 0;
 		while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
 
@@ -573,6 +585,8 @@ main (int    argc,
 
 			offsetwidgetname[11] = chan + '0';
 			GtkRange *offset = GTK_RANGE ( gtk_builder_get_object(builder, offsetwidgetname) );
+			scalewidgetname [10] = chan + '0';
+			GtkRange *scale  = GTK_RANGE ( gtk_builder_get_object(builder, scalewidgetname) );
 
 			if (offset == NULL) {
 				chan++;
@@ -583,7 +597,11 @@ main (int    argc,
 			gtk_range_set_value(offset, 0.14);
 			gtk_range_set_increments(offset, 0.05, 0.5);
 
+			gtk_range_set_range(scale, 1 , 10);
+			gtk_range_set_value(scale, 2);
+
 			g_signal_connect (offset, "value-changed", G_CALLBACK (cb_offset_changed), &y_useroffset[chan]);
+			g_signal_connect (scale,  "value-changed", G_CALLBACK (cb_scale_changed),  &y_userscale[chan]);
 			chan++;
 		}
 	}
