@@ -68,6 +68,8 @@ double x_useroffset = 0;
 double y_userscale [MAX_REAL_CHANNELS + MAX_MATH_CHANNELS];
 double y_useroffset[MAX_REAL_CHANNELS + MAX_MATH_CHANNELS];
 
+char   chanenabled[MAX_REAL_CHANNELS + MAX_MATH_CHANNELS];
+
 int trigger_channel	= 0;
 int trigger_start_mode	= TG_RISE;
 int trigger_start_y	= 675;
@@ -216,6 +218,49 @@ history_fetcher(void *arg)
 	}
 
 	return NULL;
+}
+
+void
+arrange_widgets()
+{
+	char offsetwidgetname[] = "offset_chanX";
+	char scalewidgetname[]  = "scale_chanX";
+	int chan = 0;
+	while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
+		offsetwidgetname[11] = chan + '0';
+		GtkWidget *offset = GTK_WIDGET ( gtk_builder_get_object(builder, offsetwidgetname) );
+		scalewidgetname [10] = chan + '0';
+		GtkWidget *scale  = GTK_WIDGET ( gtk_builder_get_object(builder, scalewidgetname) );
+
+		if (offset != NULL) {
+			if (chanenabled[chan])
+				gtk_widget_show(offset);
+			else
+				gtk_widget_hide(offset);
+		}
+
+		if (scale != NULL) {
+			if (chanenabled[chan])
+				gtk_widget_show(scale);
+			else
+				gtk_widget_hide(scale);
+		}
+
+		chan++;
+	}
+
+	return;
+}
+
+void
+cb_chanenable_toggled (
+		GtkToggleButton *button,
+		gpointer  user_data)
+{
+	char *chanenabled = user_data;
+
+	*chanenabled = !*chanenabled;
+	arrange_widgets();
 }
 
 void
@@ -380,6 +425,11 @@ cb_draw (GtkWidget	*area,
 
 		int chan = 0;
 		while (chan < channelsNum) {
+			if (!chanenabled[chan]) {
+				chan++;
+				continue;
+			}
+
 			int history_cur = history_start;
 			cairo_set_source_rgba (cr, line_colors[chan][0], line_colors[chan][1], line_colors[chan][2], 0.8);
 			cairo_move_to(cr, -1, height/2);
@@ -577,6 +627,7 @@ main (int    argc,
 	{
 		char offsetwidgetname[] = "offset_chanX";
 		char scalewidgetname[]  = "scale_chanX";
+		char enablewidgetname[] = "enable_chanX";
 		int chan = 0;
 		while (chan < MAX_REAL_CHANNELS + MAX_MATH_CHANNELS) {
 
@@ -587,24 +638,32 @@ main (int    argc,
 			GtkRange *offset = GTK_RANGE ( gtk_builder_get_object(builder, offsetwidgetname) );
 			scalewidgetname [10] = chan + '0';
 			GtkRange *scale  = GTK_RANGE ( gtk_builder_get_object(builder, scalewidgetname) );
+			enablewidgetname[11] = chan + '0';
+			GtkToggleButton *enable = GTK_TOGGLE_BUTTON ( gtk_builder_get_object(builder, enablewidgetname) );
 
-			if (offset == NULL) {
-				chan++;
-				continue;
+			if (offset != NULL) {
+				gtk_range_set_range(offset, -1 , 1);
+				gtk_range_set_value(offset, 0.14);
+				gtk_range_set_increments(offset, 0.05, 0.5);
+				g_signal_connect (offset, "value-changed", G_CALLBACK (cb_offset_changed), &y_useroffset[chan]);
 			}
 
-			gtk_range_set_range(offset, -1 , 1);
-			gtk_range_set_value(offset, 0.14);
-			gtk_range_set_increments(offset, 0.05, 0.5);
+			if (scale != NULL) {
+				gtk_range_set_range(scale, 1 , 10);
+				gtk_range_set_value(scale, 2);
+				g_signal_connect (scale,  "value-changed", G_CALLBACK (cb_scale_changed),  &y_userscale[chan]);
+			}
 
-			gtk_range_set_range(scale, 1 , 10);
-			gtk_range_set_value(scale, 2);
-
-			g_signal_connect (offset, "value-changed", G_CALLBACK (cb_offset_changed), &y_useroffset[chan]);
-			g_signal_connect (scale,  "value-changed", G_CALLBACK (cb_scale_changed),  &y_userscale[chan]);
+			if (enable != NULL) {
+				chanenabled[chan] = 1;
+				gtk_toggle_button_set_active(enable, TRUE);
+				g_signal_connect (enable, "toggled", G_CALLBACK (cb_chanenable_toggled),   &chanenabled[chan]);
+			}
 			chan++;
 		}
 	}
+
+	arrange_widgets();
 
 	gtk_main ();
 
